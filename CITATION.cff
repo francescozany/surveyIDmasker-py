@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "surveyIDmasker: Mask participant identifiers in survey exports (Python port)"
+version: 0.2.0
+type: software
+license: MIT
+authors:
+  - family-names: Zanibellato
+    given-names: Francesco
+    affiliation: Georgetown University
+    email: fz150@georgetown.edu
+# Same Zenodo concept DOI as the R package until the Python port gets its own.
+doi: 10.5281/zenodo.23599338
