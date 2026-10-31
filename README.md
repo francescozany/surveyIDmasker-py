@@ -1,7 +1,7 @@
 # surveyIDmasker (Python)
 
 Mask participant identifiers in survey exports before sharing them. This is the
-Python port of the [surveyIDmasker R package](../surveyIDmasker).
+Python port of the [surveyIDmasker R package](https://github.com/francescozany/surveyIDmasker).
 
 **Works with survey data files** in CSV, SPSS `.sav` and Excel `.xlsx` format:
 Qualtrics exports (extra header rows are kept), Credamo exports (Chinese column
