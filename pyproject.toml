@@ -23,6 +23,11 @@ dependencies = ["cryptography", "pandas", "pyreadstat", "openpyxl"]
 location = ["reverse_geocoder"]
 dev = ["pytest", "reverse_geocoder"]
 
+[project.urls]
+Homepage = "https://github.com/francescozany/surveyIDmasker-py"
+Issues = "https://github.com/francescozany/surveyIDmasker-py/issues"
+"R version" = "https://github.com/francescozany/surveyIDmasker"
+
 [project.scripts]
 surveyidmasker = "surveyidmasker.cli:main"
 
