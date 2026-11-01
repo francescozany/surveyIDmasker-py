@@ -1,3 +1,4 @@
+import os
 import re
 
 import pandas as pd
@@ -427,7 +428,7 @@ def test_a_folder_stands_for_its_survey_files(tmp_path, fake_export, fixed_stamp
     from surveyidmasker.survey import survey_files
     (tmp_path / "lab.csv").write_text("id,score\np1,3\n")
     (tmp_path / "old_masked_2025-01-01_10-00.csv").write_text("id,score\nMSKx,3\n")
-    assert sorted(p.rsplit("/", 1)[-1] for p in survey_files(str(tmp_path))) == ["lab.csv", "study.csv"]
+    assert sorted(os.path.basename(p) for p in survey_files(str(tmp_path))) == ["lab.csv", "study.csv"]
     res = mask_survey(str(tmp_path), columns="suggested", ip="full", latlon="full")
     assert len(res.output) == 2
 
