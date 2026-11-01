@@ -10,7 +10,7 @@ from surveyidmasker import utils
 from surveyidmasker.detect import is_latitude, is_longitude
 from surveyidmasker.key import derive_key
 from surveyidmasker.location import latlon_region
-from surveyidmasker.mask import Codebook, decrypt_code, encrypt_code
+from surveyidmasker.mask import Codebook, decrypt_code, encrypt_code, mask_with
 from surveyidmasker.scan_text import mask_in_text
 
 FAKE_EXPORT = [
@@ -107,12 +107,12 @@ def test_csv_keeps_header_rows_and_masks_consistently(fake_export, fixed_stamp):
 
 
 def test_country_state_keeps_country_and_us_state(fake_export):
-    assert latlon_region([41.3083, 41.9028, None], [-72.9279, 12.4964, 1]) == ["USCT", "IT", None]
+    assert latlon_region([41.3083, 41.9028, None], [-72.9279, 12.4964, 1]) == ["US-CT", "IT", None]
     res = mask_survey(fake_export, columns=["LocationLatitude", "LocationLongitude"],
                       latlon="country_state", scan_text=False)
     d = read_survey(res.output).data
-    assert all(re.fullmatch(r"MSK(USCT|IT)[A-Za-z0-9]{12,}", v) for v in d["LocationLatitude"])
-    assert d["LocationLatitude"][1].startswith("MSKIT")
+    assert all(re.fullmatch(r"MSK(US-CT|IT)_[A-Za-z0-9]{12,}", v) for v in d["LocationLatitude"])
+    assert d["LocationLatitude"][1].startswith("MSKIT_")
 
 
 def test_coastal_points_take_their_country_and_open_sea_none():
@@ -126,7 +126,7 @@ def test_border_points_get_no_wrong_region():
     # New York: country is certain, state is not (NJ is close).
     assert latlon_region([40.7128], [-74.006]) == ["US"]
     # Hawaii and Alaska work.
-    assert latlon_region([21.3, 61.2], [-157.86, -149.9]) == ["USHI", "USAK"]
+    assert latlon_region([21.3, 61.2], [-157.86, -149.9]) == ["US-HI", "US-AK"]
 
 
 def test_suggestions_find_identifier_columns_by_name_and_content():
@@ -199,8 +199,8 @@ def test_country_of_ip_addresses_comes_from_a_dbip_file(tmp_path, fake_export):
     res = mask_survey(fake_export, columns="IPAddress", ip="country_state", ip_db=str(db),
                       scan_text=False)
     d = read_survey(res.output).data
-    assert all(re.fullmatch(r"MSK(USCT|IT)[A-Za-z0-9]{12,}", v) for v in d["IPAddress"])
-    assert d["IPAddress"][1].startswith("MSKIT")
+    assert all(re.fullmatch(r"MSK(US-CT|IT)_[A-Za-z0-9]{12,}", v) for v in d["IPAddress"])
+    assert d["IPAddress"][1].startswith("MSKIT_")
     with pytest.raises(ValueError, match="DB-IP"):
         mask_survey(fake_export, columns="IPAddress", ip="country_state", overwrite=True,
                     interactive=False)
@@ -235,14 +235,17 @@ def test_existing_key_is_never_overwritten_and_can_be_reused(fake_export, fixed_
         mask_survey(fake_export, columns="PROLIFIC_PID", overwrite=True)
     r2 = mask_survey(fake_export, columns="PROLIFIC_PID", overwrite=True,
                      key_file=r1.key_file, scan_text=False)
-    assert lines(r1.key_file) == before
+    # The key stays the same; only the history of its use grows.
+    after = lines(r1.key_file)
+    assert after[:len(before)] == before
+    assert sum(bool(re.match(r"^#   .*study\.csv$", ln)) for ln in after) == 2
     assert list(r1.data["PROLIFIC_PID"]) == list(r2.data["PROLIFIC_PID"])
 
 
 def test_wrong_key_cannot_reidentify(tmp_path, fake_export):
     res = mask_survey(fake_export, columns="PROLIFIC_PID", scan_text=False)
     other = new_key_file(str(tmp_path / "other_KEY.txt"))
-    with pytest.raises(ValueError, match="None of the codes match"):
+    with pytest.raises(ValueError, match=r"match this key \(created"):
         reidentify(res.output, key_file=other)
     with pytest.raises(ValueError, match="does not look like"):
         reidentify(res.output, key_file=fake_export)
@@ -303,8 +306,8 @@ def test_credamo_exports_masked_coded_by_country_and_reidentified(tmp_path, fixe
     assert list(d.iloc[:, 0]) == list(orig.iloc[:, 0])
     assert all(re.fullmatch(r"MSK[A-Za-z0-9]{32,}", v) for v in d.iloc[:, 1])
     assert d.iloc[0, 1] == d.iloc[2, 1]
-    assert all(re.match(r"MSK(CN|IT)", v) for v in d.iloc[:, 4])
-    assert d.iloc[1, 4].startswith("MSKIT")
+    assert all(re.match(r"MSK(CN|IT)_", v) for v in d.iloc[:, 4])
+    assert d.iloc[1, 4].startswith("MSKIT_")
     assert d.iloc[0, 5] == d.iloc[2, 5] != d.iloc[1, 5]
     back = read_survey(reidentify(res.output, key_file=res.key_file)["output"]).data
     for col in orig.columns:
@@ -379,3 +382,136 @@ def test_large_file_is_fast(tmp_path):
     res = mask_survey(str(p), columns=["workerId", "PROLIFIC_PID"], scan_text=False)
     assert time.time() - t < 60
     assert len(res.data) == n
+
+
+# --- version 0.3.0: several files, per-file rules, new code format ---------
+
+@pytest.fixture
+def batch_files(tmp_path, fake_export):
+    b = tmp_path / "lab.csv"
+    b.write_text("id,PROLIFIC_PID,score\np1,5f1a2b3c4d5e6f7a8b9c0d1e,3\np2,bbbbbbbbbbbbbbbbbbbbbbbb,4\n")
+    c = tmp_path / "clean.csv"
+    c.write_text("condition,score\na,1\nb,2\n")
+    return fake_export, str(b), str(c)
+
+
+def test_several_files_one_key_one_report(batch_files, fixed_stamp):
+    import hashlib
+    import os
+    a, b, c = batch_files
+    res = mask_survey([a, b, c], columns="suggested", ip="full", latlon="full")
+    outs = list(res.output.values())
+    assert len(outs) == 2 and all(os.path.exists(o) for o in outs)
+    assert os.path.basename(res.key_file) == "batch_KEY_2026-01-01_10-00.txt"
+    assert os.path.basename(res.report) == "batch_masked_2026-01-01_10-00_report.txt"
+    d = os.path.dirname(a)
+    assert not os.path.exists(os.path.join(d, "study_KEY_2026-01-01_10-00.txt"))
+    d1, d2 = read_survey(outs[0]).data, read_survey(outs[1]).data
+    assert d1["PROLIFIC_PID"][0] == d2["PROLIFIC_PID"][0]
+    report = lines(res.report)
+    assert any("one key for all 2 files, created" in ln for ln in report)
+    for o in outs:
+        assert any(hashlib.sha256(open(o, "rb").read()).hexdigest() in ln for ln in report)
+    assert any("clean.csv" in ln for ln in report)
+    assert not any("5f1a2b3c4d5e6f7a8b9c0d1e" in ln for ln in report)
+    key = lines(res.key_file)
+    assert any(ln.endswith("study.csv") for ln in key) and any(ln.endswith("lab.csv") for ln in key)
+    assert not any("5f1a2b3c4d5e6f7a8b9c0d1e" in ln for ln in key)
+    back = reidentify(outs, key_file=res.key_file)
+    assert back["data"][outs[1]]["PROLIFIC_PID"][0] == "5f1a2b3c4d5e6f7a8b9c0d1e"
+    assert list(read_survey(back["output"][outs[0]]).data["PROLIFIC_PID"]) == \
+        list(read_survey(a).data["PROLIFIC_PID"])
+
+
+def test_a_folder_stands_for_its_survey_files(tmp_path, fake_export, fixed_stamp):
+    from surveyidmasker.survey import survey_files
+    (tmp_path / "lab.csv").write_text("id,score\np1,3\n")
+    (tmp_path / "old_masked_2025-01-01_10-00.csv").write_text("id,score\nMSKx,3\n")
+    assert sorted(p.rsplit("/", 1)[-1] for p in survey_files(str(tmp_path))) == ["lab.csv", "study.csv"]
+    res = mask_survey(str(tmp_path), columns="suggested", ip="full", latlon="full")
+    assert len(res.output) == 2
+
+
+def test_several_files_take_names_or_a_dict_but_not_numbers(batch_files):
+    a, b, _ = batch_files
+    with pytest.raises(ValueError, match="Column numbers differ"):
+        mask_survey([a, b], columns=[1])
+    res = mask_survey([a, b], columns=["PROLIFIC_PID"], scan_text=False)
+    assert read_survey(list(res.output.values())[1]).data["id"][0] == "p1"
+    res = mask_survey([a, b], columns={"study.csv": ["PROLIFIC_PID"], "lab.csv": ["id"]},
+                      scan_text=False, overwrite=True, key_file=res.key_file)
+    out2 = list(res.output.values())[1]
+    assert read_survey(out2).data["id"][0].startswith("MSK")
+    assert read_survey(out2).data["PROLIFIC_PID"][0] == "5f1a2b3c4d5e6f7a8b9c0d1e"
+    with pytest.raises(ValueError, match="one file"):
+        mask_survey([a, b], columns="PROLIFIC_PID", output="x.csv")
+
+
+def test_ip_and_location_rules_can_differ_by_file(tmp_path, fake_export, fixed_stamp, capsys):
+    import shutil
+    b = str(tmp_path / "study2.csv")
+    shutil.copy(fake_export, b)
+    cols = ["LocationLatitude", "LocationLongitude", "IPAddress", "PROLIFIC_PID"]
+    res = mask_survey([fake_export, b], columns=cols, scan_text=False, ip="full",
+                      latlon={"study.csv": "country_state", "study2.csv": "full"})
+    o1, o2 = res.output.values()
+    d1, d2 = read_survey(o1).data, read_survey(o2).data
+    assert all(re.match(r"MSK(US-CT|IT)_", v) for v in d1["LocationLatitude"])
+    assert not any("_" in v for v in d2["LocationLatitude"])
+    assert list(d1["PROLIFIC_PID"]) == list(d2["PROLIFIC_PID"])
+    report = lines(res.report)
+    assert any(re.match(r"^Locations: +differ by file", ln) for ln in report)
+    assert any(re.match(r"^IP addresses: +full", ln) for ln in report)
+    assert sum(ln.startswith("   Locations: ") for ln in report) == 2
+    back = reidentify(list(res.output.values()), key_file=res.key_file)
+    assert list(back["data"][o2]["LocationLatitude"]) == list(read_survey(b).data["LocationLatitude"])
+    with pytest.raises(ValueError, match="not being masked"):
+        mask_survey([fake_export, b], columns=cols, latlon={"other.csv": "full"},
+                    key_file=res.key_file, overwrite=True)
+    with pytest.raises(ValueError, match="must be"):
+        mask_survey([fake_export, b], columns=cols, latlon={"study.csv": "partial"},
+                    key_file=res.key_file, overwrite=True)
+    capsys.readouterr()
+    res3 = mask_survey([fake_export, b], columns=cols, ip="full", latlon={"study.csv": "country_state"},
+                       scan_text=False, key_file=res.key_file, overwrite=True)
+    assert "latitude/longitude fully" in capsys.readouterr().err
+    assert not any("_" in v for v in read_survey(list(res3.output.values())[1]).data["LocationLatitude"])
+
+
+def test_the_region_is_always_the_part_between_msk_and_underscore():
+    from surveyidmasker.survey import region_prefix
+    cb = Codebook(derive_key(b"\x05" * 32))
+    values = [str(i) for i in range(300)]
+    regions = ["IT", "US-CT", None] * 100
+    m = mask_with(cb, values, prefix=[region_prefix(r) for r in regions])
+    assert not any(re.search(r"[_-]", v) for v, r in zip(m, regions) if r is None)
+    assert [re.sub(r"^MSK([^_]*)_.*$", r"\1", v) for v, r in zip(m, regions) if r] == \
+        [r for r in regions if r]
+
+
+def test_codes_with_a_region_are_read_back_also_in_text_and_in_the_old_format(tmp_path):
+    from surveyidmasker.key import write_key_file
+    from surveyidmasker.reidentify import decode_token
+    key = derive_key(b"\x06" * 32)
+    cb = Codebook(key)
+    new = mask_with(cb, ["1.2.3.4"], prefix="MSKUS-CT_")[0]
+    old = mask_with(cb, ["5.6.7.8"], prefix="MSKUSCT")[0]
+    assert decode_token(new, key) == "1.2.3.4"
+    assert decode_token(old, key) == "5.6.7.8"
+    path = tmp_path / "m_masked_2026-01-01_10-00.csv"
+    path.write_text(f"ip,note\n{new},seen {new}.\n")
+    kf = str(tmp_path / "k.txt")
+    write_key_file(key.secret, kf)
+    back = reidentify(str(path), key_file=kf)
+    assert back["data"]["ip"][0] == "1.2.3.4"
+    assert back["data"]["note"][0] == "seen 1.2.3.4."
+
+
+def test_key_file_format_matches_r_030(tmp_path):
+    from surveyidmasker.key import read_key_file
+    p = str(tmp_path / "k.txt")
+    new_key_file(p)
+    text = lines(p)
+    assert any(ln.startswith("# Created:") for ln in text)
+    assert text[-1] == "# Files masked with this key:"
+    assert read_key_file(p).created != "(unknown)"

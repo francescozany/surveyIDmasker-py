@@ -43,8 +43,8 @@ def _haversine_km(lat1, lon1, lat2, lon2):
 
 
 def latlon_region(lat, lon):
-    """Region code for each coordinate: "IT", "FR", ... and "USCT", "USNY",
-    ... for the United States. None when the point is near a border or the
+    """Region code for each coordinate: "IT", "FR", ... and "US-CT", "US-NY",
+    ... (ISO 3166-2) for the United States. None when the point is near a border or the
     coast (within about 10 km) or far from any known place.
 
     Uses the offline ``reverse_geocoder`` database (nearest known place).
@@ -95,7 +95,7 @@ def latlon_region(lat, lon):
             continue
         cc = countries.pop()
         # Neighbouring states disagree: keep only the country.
-        out[i] = "US" + states.pop() if cc == "US" and len(states) == 1 and None not in states else cc
+        out[i] = "US-" + states.pop() if cc == "US" and len(states) == 1 and None not in states else cc
     return out
 
 
@@ -139,7 +139,7 @@ def ip_region(ips, db):
             continue
         if cc == "US":
             st = state_abb(db["state"].iat[i])
-            out[k] = "US" + st if st else cc
+            out[k] = "US-" + st if st else cc
         else:
             out[k] = cc
     return out

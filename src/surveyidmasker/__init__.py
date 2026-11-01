@@ -1,6 +1,6 @@
 """Mask participant identifiers in survey exports (Python port of the
 surveyIDmasker R package; key files and codes are interchangeable)."""
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .detect import suggest_id_columns
 from .key import new_key_file

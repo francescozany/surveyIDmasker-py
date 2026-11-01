@@ -19,7 +19,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     m = sub.add_parser("mask", help="mask identifiers in a survey file")
-    m.add_argument("file", nargs="?")
+    m.add_argument("files", nargs="*", help="one or more files, or a folder (same key for all)")
     m.add_argument("--columns", nargs="+", help='names, numbers, or "suggested"')
     m.add_argument("--ip", choices=["full", "country_state"])
     m.add_argument("--latlon", choices=["full", "country_state"])
@@ -32,7 +32,7 @@ def main(argv=None):
     m.add_argument("--header-rows", type=int)
 
     r = sub.add_parser("reidentify", help="restore original identifiers using the key")
-    r.add_argument("file")
+    r.add_argument("files", nargs="+", help="masked file(s) or a folder")
     r.add_argument("--key-file", required=True)
     r.add_argument("--output")
     r.add_argument("--overwrite", action="store_true")
@@ -49,10 +49,10 @@ def main(argv=None):
     a = p.parse_args(argv)
     try:
         if a.cmd == "mask":
-            mask_survey(a.file, _columns(a.columns), a.ip, a.latlon, a.ip_db, a.key_file,
+            mask_survey((a.files if len(a.files) > 1 else a.files[0]) if a.files else None, _columns(a.columns), a.ip, a.latlon, a.ip_db, a.key_file,
                         not a.no_scan_text, a.mask_text, a.output, a.overwrite, a.header_rows)
         elif a.cmd == "reidentify":
-            reidentify(a.file, a.key_file, a.output, a.overwrite, a.header_rows)
+            reidentify(a.files if len(a.files) > 1 else a.files[0], a.key_file, a.output, a.overwrite, a.header_rows)
         elif a.cmd == "columns":
             list_columns(a.file)
         elif a.cmd == "new-key":

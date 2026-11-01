@@ -8,25 +8,51 @@ from .read_write import read_survey, write_survey
 
 LAT_TAG = "\x1fa"
 LON_TAG = "\x1fo"
-_TOKEN = re.compile(r"(?<![A-Za-z0-9])MSK[A-Za-z0-9]{10,}(?![A-Za-z0-9])")
+# "MSK" + optional region and "_" (MSKIT_..., MSKUS-CT_...) + code.
+_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])MSK(?:[A-Z]{2}(?:-[A-Z0-9]{1,3})?_)?[A-Za-z0-9]{10,}(?![A-Za-z0-9_-])")
+
+
+def decode_value(val):
+    """Latitude and longitude codes hold the whole pair: keep the right half."""
+    if val is None:
+        return None
+    if val.startswith(LAT_TAG):
+        return val[2:].split(",", 1)[0]
+    if val.startswith(LON_TAG):
+        return val[2:].split(",", 1)[1] if "," in val[2:] else val[2:]
+    return val
 
 
 def decode_token(token, key):
-    """A token is "MSK" + optional region (e.g. "IT" or "USCT") + code. The
-    region length is unknown, so each possibility is tried; only the right one
-    passes the key check."""
+    """A token is "MSK" + optional region and "_" (e.g. "MSKIT_", "MSKUS-CT_")
+    + code. Codes from before the "_" had the region with no separator
+    ("MSKUSCT..."): for those each possible region length is tried, and only
+    the right one passes the key check."""
+    if "_" in token:
+        return decode_value(decrypt_code(re.sub(r"^MSK[^_]*_", "", token), key))
     rest = token[3:]
     for n in (0, 2, 4):
         if n and not re.match(rf"[A-Z]{{{n}}}", rest):
             continue
         val = decrypt_code(rest[n:], key)
         if val is not None:
-            if val.startswith(LAT_TAG):
-                return val[2:].split(",", 1)[0]
-            if val.startswith(LON_TAG):
-                return val[2:].split(",", 1)[1] if "," in val[2:] else val[2:]
-            return val
+            return decode_value(val)
     return None
+
+
+def _expand_masked(file):
+    files = []
+    for f in ([file] if isinstance(file, (str, os.PathLike)) else list(file)):
+        f = os.fspath(f)
+        if os.path.isdir(f):
+            found = sorted(os.path.join(f, n) for n in os.listdir(f)
+                           if re.search(r"_masked_.*\.(csv|sav|xlsx)$", n, re.I))
+            if not found:
+                raise ValueError(f"No masked files in the folder: {f}")
+            files += found
+        else:
+            files.append(f)
+    return files
 
 
 def reidentify(file, key_file, output=None, overwrite=False, header_rows=None):
@@ -35,11 +61,25 @@ def reidentify(file, key_file, output=None, overwrite=False, header_rows=None):
     Reads a file masked by :func:`mask_survey` and, using the private key
     file, replaces every ``MSK`` code (also inside free text) with the original
     value. ``MSKblank`` becomes an empty cell again. The masked file is not
-    changed. Returns a dict with the re-identified ``data`` and the ``output``
-    path.
+    changed. ``file`` can also be a list of files or a folder (all masked files
+    in it). Returns a dict with the re-identified ``data`` and the ``output``
+    path; with several files both are dicts keyed by file.
     """
-    file = os.fspath(file)
     key = read_key_file(key_file)
+    files = _expand_masked(file)
+    if len(files) == 1:
+        return _reidentify_one(files[0], key, output, overwrite, header_rows)
+    if output is not None:
+        raise ValueError("`output` can only be used with one file.")
+    res = {}
+    for f in files:
+        print(f"\n{os.path.basename(f)}:")
+        res[f] = _reidentify_one(f, key, None, overwrite, header_rows)
+    return {"data": {f: r["data"] for f, r in res.items()},
+            "output": {f: r["output"] for f, r in res.items()}}
+
+
+def _reidentify_one(file, key, output, overwrite, header_rows):
     x = read_survey(file, header_rows)
     data = x.data
 
@@ -79,7 +119,9 @@ def reidentify(file, key_file, output=None, overwrite=False, header_rows=None):
             data[col] = new
             changed.append(col)
     if restored == 0 and unknown > 0:
-        raise ValueError("None of the codes match this key. Is it the key file used to mask this file?")
+        raise ValueError(f"None of the codes in {os.path.basename(file)} match this key "
+                         f"(created {key.created}). The report of the masked file says "
+                         "when its key was created.")
 
     write_survey(x, out_path, changed=changed)
     print(f"Restored {restored} value(s) in {len(changed)} column(s): {', '.join(map(str, changed))}")
