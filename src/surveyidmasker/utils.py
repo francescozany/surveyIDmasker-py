@@ -1,6 +1,7 @@
 import math
 import re
 import time
+from decimal import Decimal
 
 
 def time_stamp():
@@ -15,7 +16,10 @@ def to_str(v):
     if isinstance(v, float):
         if math.isnan(v):
             return None
-        return str(int(v)) if v.is_integer() and abs(v) < 1e15 else format(v, ".15g")
+        if v.is_integer() and abs(v) < 1e15:
+            return str(int(v))
+        s = format(v, ".15g")
+        return format(Decimal(s), "f") if "e" in s else s
     if isinstance(v, str):
         return v
     try:

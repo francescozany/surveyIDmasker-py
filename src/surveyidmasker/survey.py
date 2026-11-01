@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import sys
+import textwrap
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,7 +11,8 @@ from typing import Any
 import pandas as pd
 
 from . import utils
-from .detect import is_ip_column, is_latitude, is_longitude, suggest_id_columns
+from .detect import (ID_COLUMN_NAMES, ID_PATTERNS, is_ip_column, is_latitude, is_longitude,
+                     normalize_name, suggest_id_columns)
 from .key import add_key_use, derive_key, read_key_file, write_key_file
 from .location import ip_region, latlon_region, read_ip_db
 from .mask import Codebook, mask_with
@@ -95,7 +97,7 @@ def survey_files(directory):
     """Survey files in a folder, leaving out the files this package writes."""
     out = []
     for n in sorted(os.listdir(directory)):
-        if not re.search(r"\.(csv|sav|xlsx)$", n, re.I):
+        if not re.search(r"\.(csv|sav|dta|xlsx)$", n, re.I):
             continue
         if re.search(r"_(masked|reidentified)_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}|^~\$", n):
             continue
@@ -112,7 +114,7 @@ def expand_files(file):
         if os.path.isdir(f):
             found = survey_files(f)
             if not found:
-                raise ValueError(f"No survey files (.csv, .sav, .xlsx) in the folder: {f}")
+                raise ValueError(f"No survey files (.csv, .sav, .dta, .xlsx) in the folder: {f}")
             out += found
         else:
             out.append(os.path.abspath(f))
@@ -137,7 +139,7 @@ def _read_each(paths, header_rows, skip_unreadable=False):
 def choose_files(header_rows):
     """Guided choice of the files: one or several paths (drag them into the
     terminal), or a folder."""
-    print("Give the survey file(s) to mask (.csv, .sav or .xlsx): one path, several\n"
+    print("Give the survey file(s) to mask (.csv, .sav, .dta or .xlsx): one path, several\n"
           "paths to mask them with the same key, or a folder. You can drag them into\n"
           "this window.")
     while True:
@@ -414,7 +416,7 @@ def _mask_one(x, columns, cb, latlon, ip, ip_cols, db, scan_text, mask_text, ori
             notes.append(f"{len(long)} SPSS variable label(s) longer than 256 characters were "
                          f"shortened (an SPSS file limit): {', '.join(map(str, long))}.")
     return {"data": data, "notes": notes, "text_found": text_found, "rows": len(data),
-            "changed": changed}
+            "changed": changed, "original": x.data[list(columns)]}
 
 
 # --- report and repeat command ---------------------------------------------
@@ -475,8 +477,62 @@ def _write_report(path, inputs, outputs, results, cols, key, new_key, ip_of, lat
             lines.append(f"{pad}SHA-256 of masked file: {hashlib.sha256(f.read()).hexdigest()}")
     if skipped:
         lines += ["", "Not masked (no identifier columns):"] + ["  " + os.path.basename(p) for p in skipped]
+    from . import citation
+    sentence = _methods_sentence(inputs, results, cols, ip_of, latlon_of)
+    lines += ["", "For the methods section or README (edit as needed):"]
+    lines += ["  " + s for s in textwrap.wrap(sentence, 75)]
+    lines += ["", "Reference:"] + ["  " + s for s in textwrap.wrap(citation(), 75)]
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def _methods_sentence(inputs, results, cols, ip_of, latlon_of):
+    """A sentence describing the masking, ready to paste into a paper or a
+    replication package README."""
+    from . import __version__
+    kinds = list(dict.fromkeys(
+        _column_kind(c, results[p]["original"][c]) for p in inputs for c in cols[p]))
+    kinds = [k for k in kinds if k != "other identifiers"] + [k for k in kinds if k == "other identifiers"]
+    what = ", ".join(kinds[:-1]) + " and " + kinds[-1] if len(kinds) > 1 else (kinds[0] if kinds else "")
+    what = "" if kinds == ["other identifiers"] else f" ({what})"
+    n = len(inputs)
+    same = " in both data files" if n == 2 else f" in all {n} data files" if n > 2 else ""
+    s = (f"Participant identifiers{what} were replaced with codes encrypted with a private key, "
+         f"using surveyIDmasker {__version__} (Zanibellato, 2026); the same identifier received "
+         f"the same code{same}.")
+
+    def kept(modes, label):
+        if not any(m == "country_state" for m in modes.values()):
+            return None
+        where = "" if all(m == "country_state" for m in modes.values()) else " in some files"
+        return f"Masked {label} keep the country (and the US state){where}."
+
+    return " ".join(x for x in (s, kept(latlon_of, "locations"), kept(ip_of, "IP addresses")) if x)
+
+
+_KIND_PLURAL = {
+    "location (latitude)": "locations", "location (longitude)": "locations",
+    "location (zip code)": "zip codes", "location (postal code)": "postal codes",
+    "location (city)": "cities", "location (region)": "regions", "location (province)": "provinces",
+    "IP address": "IP addresses", "email": "emails", "name": "names",
+    "phone number": "phone numbers", "phone area code": "phone area codes",
+    "completion code": "completion codes", "external reference": "external references",
+}
+
+
+def _column_kind(col, values):
+    """Plain-language kind of a masked column, from its name or content."""
+    reason = ID_COLUMN_NAMES.get(normalize_name(str(col)))
+    if reason is None:
+        x = [v.strip(" \t\r\n") for v in (to_str(v) for v in values) if not is_blank(v)]
+        for kind, rx in ID_PATTERNS.items():
+            if x and sum(1 for v in x if re.search(rx, v, re.ASCII)) / len(x) >= 0.5:
+                reason = kind
+    if reason is None:
+        return "other identifiers"
+    if reason in _KIND_PLURAL:
+        return _KIND_PLURAL[reason]
+    return re.sub(r" ID$", " IDs", reason)
 
 
 def _q(s):

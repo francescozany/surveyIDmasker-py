@@ -26,11 +26,17 @@ ID_COLUMN_NAMES = {
     "recipientfirstname": "name", "recipientlastname": "name",
     "externalreference": "external reference", "externaldatareference": "external reference",
     "email": "email", "emailaddress": "email",
+    # Location and contact details, e.g. added by a geolocation step
+    "zip": "location (zip code)", "zipcode": "location (zip code)",
+    "postcode": "location (postal code)", "postalcode": "location (postal code)",
+    "city": "location (city)", "region": "location (region)", "areacode": "phone area code",
+    "phone": "phone number", "phonenumber": "phone number", "telephone": "phone number",
     # Credamo (Chinese headers). 作答ID is the response ID, like Qualtrics'
     # ResponseId, so it is not suggested.
     "用户id": "Credamo user ID", "userid": "user ID",
     "经度": "location (longitude)", "纬度": "location (latitude)",
     "省份": "location (province)", "城市": "location (city)",
+    "手机号": "phone number", "电话": "phone number", "邮箱": "email",
 }
 
 # Patterns that identify a whole cell as an identifier. Browser versions

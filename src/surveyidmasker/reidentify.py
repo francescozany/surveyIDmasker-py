@@ -46,7 +46,7 @@ def _expand_masked(file):
         f = os.fspath(f)
         if os.path.isdir(f):
             found = sorted(os.path.join(f, n) for n in os.listdir(f)
-                           if re.search(r"_masked_.*\.(csv|sav|xlsx)$", n, re.I))
+                           if re.search(r"_masked_.*\.(csv|sav|dta|xlsx)$", n, re.I))
             if not found:
                 raise ValueError(f"No masked files in the folder: {f}")
             files += found

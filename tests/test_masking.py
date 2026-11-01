@@ -515,3 +515,125 @@ def test_key_file_format_matches_r_030(tmp_path):
     assert any(ln.startswith("# Created:") for ln in text)
     assert text[-1] == "# Files masked with this key:"
     assert read_key_file(p).created != "(unknown)"
+
+
+# --- later 0.3.0 additions: Stata, phone numbers, check_survey, report text --
+
+def test_codes_match_the_test_values_in_codes_md(tmp_path):
+    key_file = tmp_path / "k.txt"
+    key_file.write_text("key: " + bytes(range(32)).hex() + "\n")
+    expected = {
+        "A1B2C3D4E5F6G7": "MSKyfXOdQODgzfNar1ztKlXIxotIGBQXbGkUnY",
+        "5f1a2b3c4d5e6f7a8b9c0d1e": "MSKEDme9TFVDrLzRv1RI8HmkzQ10wBQUKnn3yLef0TkMUta1",
+        "1.2.3.4": "MSKBDmEGynURZQHc6ap3tiajChhCXT9lalAfmL0",
+    }
+    assert mask_values(list(expected), key_file=str(key_file)) == list(expected.values())
+
+
+def test_location_and_contact_columns_are_suggested_flags_and_countries_are_not():
+    d = pd.DataFrame({"zip": ["06511"], "city": ["New Haven"], "region": ["CT"], "areacode": ["203"],
+                      "phone": ["203-555-0147"], "mobile": ["1"], "country": ["United States"],
+                      "countrycode": ["US"]})
+    assert list(suggest_id_columns(d)["column"]) == ["zip", "city", "region", "areacode", "phone"]
+
+
+def test_phone_numbers_are_found_and_masked_in_free_text():
+    d = pd.DataFrame({"comment": ["call me at (203) 555-0147", "我的手机 13812345678",
+                                  "I scored 2035550147 points", "fine"]})
+    found = scan_text(d)
+    assert list(found["type"]) == ["phone number"] and list(found["cells"]) == [2]
+    cb = Codebook(derive_key(b"k" * 32))
+    out = mask_in_text(list(d["comment"]), cb)
+    assert re.fullmatch(r"call me at MSK[A-Za-z0-9]+", out[0])
+    assert "13812345678" not in out[1]
+    assert out[2:] == list(d["comment"][2:])
+    # Digits inside a longer code (e.g. a Connect ID) are not a phone number.
+    assert len(scan_text(pd.DataFrame({"x": ["4821AB12345678901CD9"]}))) == 0
+
+
+def test_the_longest_known_id_is_replaced_whole():
+    cb = Codebook(derive_key(b"k" * 32))
+    out = mask_in_text(["see ABCDEF123456789"], cb, ["ABCDEF", "ABCDEF123456789"])
+    assert out[0] == "see MSK" + cb.codes_for(["ABCDEF123456789"])[0]
+
+
+def test_ids_stored_as_numbers_get_the_same_code_as_the_same_ids_written_as_text(tmp_path):
+    key = new_key_file(str(tmp_path / "k.txt"))
+    (tmp_path / "a.csv").write_text("pid,score\n100000,1\n45000000000,2\n25794,3\n")
+    pyreadstat.write_sav(pd.DataFrame({"pid": [100000.0, 45000000000.0, 25794.0], "score": [1.0, 2.0, 3.0]}),
+                         str(tmp_path / "b.sav"))
+    res = mask_survey([str(tmp_path / "a.csv"), str(tmp_path / "b.sav")], columns="pid",
+                      scan_text=False, key_file=key)
+    a_out, b_out = list(res.output.values())
+    assert list(read_survey(a_out).data["pid"]) == list(pyreadstat.read_sav(b_out)[0]["pid"])
+    back = reidentify(b_out, key_file=key)
+    assert list(back["data"]["pid"]) == ["100000", "45000000000", "25794"]
+    assert utils.to_str(1e5) == "100000" and utils.to_str(0.1) == "0.1"
+    assert utils.to_str(-3.0) == "-3" and utils.to_str(0.00001) == "0.00001"
+
+
+def test_an_empty_file_gives_a_clear_error(tmp_path):
+    p = tmp_path / "empty.csv"
+    p.write_bytes(b"")
+    with pytest.raises(ValueError, match="empty.csv is empty"):
+        read_survey(str(p))
+
+
+def test_csv_files_must_be_utf8(tmp_path):
+    for name, enc in (("gbk.csv", "gbk"), ("u16.csv", "utf-16-le")):
+        p = tmp_path / name
+        p.write_bytes("id,城市\np1,安阳市\n".encode(enc) if enc == "gbk" else "id,city\np1,Rome\n".encode(enc))
+        with pytest.raises(ValueError, match="not saved as UTF-8"):
+            read_survey(str(p))
+    bom = tmp_path / "bom.csv"
+    bom.write_bytes(b"\xef\xbb\xbf" + "id,城市\np1,安阳市\n".encode("utf-8"))
+    assert read_survey(str(bom)).data.iloc[0, 1] == "安阳市"
+
+
+def test_stata_files_keep_labels_and_come_back_with_the_key(tmp_path, fixed_stamp):
+    from surveyidmasker.read_write import read_survey as rs
+    path = str(tmp_path / "study.dta")
+    d = pd.DataFrame({"PROLIFIC_PID": ["5f1a2b3c4d5e6f7a8b9c0d1e", "", "5f1a2b3c4d5e6f7a8b9c0d1e"],
+                      "q1": [1.0, 2.0, 1.0]})
+    pyreadstat.write_dta(d, path, column_labels=["Prolific ID", "Do you agree?"],
+                         variable_value_labels={"q1": {1: "Yes", 2: "No"}})
+    assert rs(path).format == "dta"
+    res = mask_survey(path, columns="suggested", scan_text=False)
+    m, meta = pyreadstat.read_dta(res.output)
+    assert re.fullmatch(r"MSK[A-Za-z0-9]{32,}", m["PROLIFIC_PID"][0])
+    assert m["PROLIFIC_PID"][1] == "MSKblank" and m["PROLIFIC_PID"][0] == m["PROLIFIC_PID"][2]
+    assert meta.column_labels == ["Prolific ID", "Do you agree?"]
+    assert meta.variable_value_labels["q1"] == {1.0: "Yes", 2.0: "No"}
+    back, _ = pyreadstat.read_dta(reidentify(res.output, key_file=res.key_file)["output"])
+    assert list(back["PROLIFIC_PID"]) == list(d["PROLIFIC_PID"])
+
+
+def test_the_report_ends_with_a_methods_sentence_and_the_reference(tmp_path, fake_export, fixed_stamp):
+    b = tmp_path / "lab.csv"
+    b.write_text("workerId,zip\nA1B2C3D4E5F6G7,06511\n")
+    res = mask_survey([fake_export, str(b)], columns="suggested", ip="full", latlon="country_state",
+                      scan_text=False)
+    report = re.sub(r"\s+", " ", " ".join(lines(res.report)))
+    assert "For the methods section or README" in report
+    for kind in ("IP addresses", "locations", "Prolific IDs", "MTurk worker IDs", "zip codes"):
+        assert kind in report
+    assert "in both data files" in report
+    assert "Masked locations keep the country" in report
+    assert "doi.org/10.5281/zenodo" in report
+
+
+def test_check_survey_lists_what_is_still_identifying_and_nothing_in_a_clean_file(
+        fake_export, fixed_stamp, capsys):
+    from surveyidmasker import check_survey
+    res = mask_survey(fake_export, columns=["PROLIFIC_PID", "IPAddress"], scan_text=False)
+    capsys.readouterr()
+    found = check_survey(res.output)
+    out = capsys.readouterr().out
+    assert "Masked columns: IPAddress, PROLIFIC_PID" in out
+    assert set(found["column"]) == {"LocationLatitude", "LocationLongitude", "participantId", "comment"}
+    assert list(found.loc[found["column"] == "comment", "issue"]) == ["Prolific ID in text"]
+    res2 = mask_survey(fake_export, columns="suggested", ip="full", latlon="full", mask_text=True,
+                       key_file=res.key_file, overwrite=True)
+    capsys.readouterr()
+    found = check_survey(res2.output)
+    assert len(found) == 0 and "Nothing else" in capsys.readouterr().out

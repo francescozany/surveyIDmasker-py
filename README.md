@@ -3,8 +3,8 @@
 Mask participant identifiers in survey exports before sharing them. This is the
 Python port of the [surveyIDmasker R package](https://github.com/francescozany/surveyIDmasker).
 
-**Works with survey data files** in CSV, SPSS `.sav` and Excel `.xlsx` format:
-Qualtrics exports (extra header rows are kept), Credamo exports (Chinese column
+**Works with survey data files** in CSV, SPSS `.sav`, Stata `.dta` and Excel `.xlsx`
+format: Qualtrics exports (extra header rows are kept), Credamo exports (Chinese column
 names) and lab data files with one header row.
 
 Prolific, CloudResearch Connect and MTurk IDs, IP addresses, locations and
@@ -38,7 +38,9 @@ Type `q` at any question to exit. Nothing is saved until the end. The original
 file is never changed. Files written:
 
 - `<name>_masked_<date>_<time>.<ext>`: the file to share;
-- `<name>_masked_<date>_<time>_report.txt`: what was masked and when;
+- `<name>_masked_<date>_<time>_report.txt`: what was masked, when, and with which key
+  (shown only by the time it was created), plus a sentence ready to paste into
+  your methods section or replication README;
 - `<name>_KEY_<date>_<time>.txt`: the private key. **Keep it, never share it.**
 
 ### Several files with the same key
@@ -91,6 +93,7 @@ Command line:
 surveyidmasker columns my_study.sav
 surveyidmasker mask my_study.csv --columns suggested --ip full --latlon full
 surveyidmasker mask study1.csv study2.sav --columns suggested     # one key for both
+surveyidmasker check my_study_masked_*.csv                           # anything still identifying?
 surveyidmasker reidentify my_study_masked_*.csv --key-file my_study_KEY_*.txt
 ```
 
@@ -112,9 +115,17 @@ surveyidmasker reidentify my_study_masked_*.csv --key-file my_study_KEY_*.txt
   from <https://db-ip.com/db/lite.php> (`ip_db="path/to/dbip-city-lite.csv"`).
   IP geolocation by DB-IP (db-ip.com), CC BY 4.0: please credit it.
 - **Free text**: other columns are checked for things that look like IDs,
-  emails or IP addresses. Use `mask_text=True` to replace them too.
-- **CSV files must be UTF-8** (Excel: "CSV UTF-8").
-- Your survey responses never leave your computer.
+  emails, IP addresses or phone numbers. Use `mask_text=True` to replace them too.
+- **Location details** such as `zip`, `city` or `region` columns (added by some
+  geolocation steps) are suggested too: a zip code can identify a person.
+- **CSV files must be UTF-8**, as Qualtrics and most tools save them. Other
+  encodings (e.g. CSVs saved by Excel in China) are refused with an error: save
+  the file again as "CSV UTF-8" first.
+- **Excel files: only the first sheet** is read and written.
+- **Before sharing**, `check_survey("my_study_masked_....csv")` lists anything
+  that still looks identifying.
+- Your survey responses never leave your computer. How the codes are made is
+  explained in [CODES.md](CODES.md).
 
 ## Tests
 

@@ -10,6 +10,11 @@ TEXT_PATTERNS = {
     "MTurk worker ID": r"\bA(?=[0-9A-Z]*[0-9])[0-9A-Z]{11,20}\b",
     "email": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
     "IP address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b(?<!\.0\.0\.0)",
+    # North American numbers written with separators, e.g. (203) 555-0147,
+    # +1 203.555.0147, and Chinese mobile numbers (11 digits starting 13-19)
+    # that are not part of a longer code such as a Connect ID.
+    "phone number": (r"(?<![\w.])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?![\w.])"
+                     r"|(?<![A-Za-z0-9])(?:\+?86[ -]?)?1[3-9]\d{9}(?![A-Za-z0-9])"),
 }
 _TEXT_RE = {k: re.compile(v, re.ASCII) for k, v in TEXT_PATTERNS.items()}
 
@@ -60,7 +65,8 @@ def mask_in_text(x, cb, known_ids=()):
     out = ["" if n else str(v) for v, n in zip(x, na)]
     for rx in _TEXT_RE.values():
         out = [rx.sub(lambda m: "MSK" + cb.codes_for([m.group(0)])[0], v) for v in out]
-    for i in usable_ids(list(known_ids)):
+    # Longest first, so an ID that contains a shorter one is replaced whole.
+    for i in sorted(usable_ids(list(known_ids)), key=lambda s: -len(s)):
         code = None
         for j, v in enumerate(out):
             if i in v:

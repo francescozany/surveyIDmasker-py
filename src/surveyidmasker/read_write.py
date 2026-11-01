@@ -1,4 +1,5 @@
 import csv
+import io
 import os
 import re
 from dataclasses import dataclass, field
@@ -39,20 +40,24 @@ def detect_header_rows(rows):
 
 
 def read_survey(path, header_rows=None) -> Survey:
-    """Read a CSV, SPSS (.sav) or Excel (.xlsx) survey file, keeping any extra
+    """Read a CSV, SPSS (.sav), Stata (.dta) or Excel (.xlsx) survey file, keeping any extra
     header rows so the file can be written back unchanged apart from the
     masked columns."""
     path = os.fspath(path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
+    if os.path.getsize(path) == 0:
+        raise ValueError(f"{os.path.basename(path)} is empty.")
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     if ext == "csv":
         return _read_csv(path, header_rows)
     if ext == "sav":
-        return _read_sav(path)
+        return _read_stats(path, "sav")
+    if ext == "dta":
+        return _read_stats(path, "dta")
     if ext == "xlsx":
         return _read_xlsx(path, header_rows)
-    raise ValueError(f"Unsupported file type '.{ext}'. Use a .csv, .sav or .xlsx file.")
+    raise ValueError(f"Unsupported file type '.{ext}'. Use a .csv, .sav, .dta or .xlsx file.")
 
 
 def _frame(names, body):
@@ -62,13 +67,21 @@ def _frame(names, body):
 
 def _read_csv(path, header_rows):
     with open(path, "rb") as f:
-        bom = f.read(3) == b"\xef\xbb\xbf"
+        content = f.read()
+    bom = content[:3] == b"\xef\xbb\xbf"
+    # CSV files must be UTF-8 (with or without BOM). Other encodings (e.g. GBK
+    # from Excel in China, or UTF-16) would turn non-English text into garbage.
     try:
-        with open(path, encoding="utf-8-sig", newline="") as f:
-            raw = list(csv.reader(f))
+        if b"\x00" in content:
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "NUL byte")
+        text = content.decode("utf-8-sig")
     except UnicodeDecodeError as e:
-        raise ValueError(f"{path} is not UTF-8 text. Re-save it as CSV UTF-8 (Excel: "
-                         "'CSV UTF-8') and try again.") from e
+        raise ValueError(
+            f"{os.path.basename(path)} is not saved as UTF-8 text, the encoding surveyIDmasker "
+            "reads.\nSave it again as UTF-8, e.g. in Excel: File > Save As > \"CSV UTF-8 "
+            "(Comma delimited)\". Check afterwards that non-English text (e.g. Chinese) "
+            "looks right.") from e
+    raw = list(csv.reader(io.StringIO(text, newline="")))
     width = max((len(r) for r in raw), default=0)
     raw = [r + [""] * (width - len(r)) for r in raw]
     h = detect_header_rows(raw) if header_rows is None else header_rows
@@ -94,15 +107,16 @@ def _read_xlsx(path, header_rows):
                   names=names, sheet=ws.title)
 
 
-def _read_sav(path):
+def _read_stats(path, fmt):
     import pyreadstat
-    df, meta = pyreadstat.read_sav(path)
-    return Survey(data=df, format="sav", meta={
+    df, meta = (pyreadstat.read_sav if fmt == "sav" else pyreadstat.read_dta)(path)
+    return Survey(data=df, format=fmt, meta={
         "column_labels": dict(zip(meta.column_names, meta.column_labels)),
         "value_labels": meta.variable_value_labels,
         "measure": meta.variable_measure,
         "display_width": meta.variable_display_width,
-        "missing_ranges": meta.missing_ranges,
+        "missing_ranges": getattr(meta, "missing_ranges", None),
+        "missing_user_values": getattr(meta, "missing_user_values", None),
         "file_label": meta.file_label,
     })
 
@@ -115,8 +129,8 @@ def write_survey(x: Survey, path, changed=()):
                 for row in d.itertuples(index=False, name=None)]
         with open(path, "w", encoding="utf-8-sig" if x.bom else "utf-8", newline="") as f:
             csv.writer(f, lineterminator="\n").writerows(list(x.header) + body)
-    elif x.format == "sav":
-        _write_sav(x, path, changed)
+    elif x.format in ("sav", "dta"):
+        _write_stats(x, path, changed)
     elif x.format == "xlsx":
         import openpyxl
         wb = openpyxl.Workbook()
@@ -140,7 +154,7 @@ def long_labels(x: Survey):
     return [c for c in x.data.columns if len((labels.get(c) or "").encode("utf-8")) > 256]
 
 
-def _write_sav(x: Survey, path, changed):
+def _write_stats(x: Survey, path, changed):
     import pyreadstat
     m, d = x.meta, x.data
     changed = set(changed)
@@ -152,10 +166,15 @@ def _write_sav(x: Survey, path, changed):
     kwargs = dict(
         column_labels=[labels.get(c) for c in cols],
         variable_value_labels=keep(m.get("value_labels")),
-        missing_ranges=keep(m.get("missing_ranges")),
-        variable_display_width={k: v for k, v in (m.get("display_width") or {}).items() if k in cols},
-        variable_measure={k: v for k, v in (m.get("measure") or {}).items() if k in cols},
     )
+    if x.format == "sav":
+        kwargs.update(
+            missing_ranges=keep(m.get("missing_ranges")),
+            variable_display_width={k: v for k, v in (m.get("display_width") or {}).items() if k in cols},
+            variable_measure={k: v for k, v in (m.get("measure") or {}).items() if k in cols},
+        )
+    else:
+        kwargs["missing_user_values"] = keep(m.get("missing_user_values"))
     if m.get("file_label"):
         kwargs["file_label"] = m["file_label"]
     out = d.copy()
@@ -163,4 +182,7 @@ def _write_sav(x: Survey, path, changed):
         if c in changed:
             out[c] = pd.Series([None if v is None else str(v) for v in out[c]],
                                index=out.index, dtype=object)
-    pyreadstat.write_sav(out, path, **kwargs)
+    if x.format == "sav":
+        pyreadstat.write_sav(out, path, **kwargs)
+    else:
+        pyreadstat.write_dta(out, path, **kwargs)

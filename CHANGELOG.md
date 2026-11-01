@@ -17,9 +17,21 @@ Port of surveyIDmasker (R) 0.3.0.
 * `reidentify()` takes several files (or a folder) at once, and a wrong key says when
   it was created.
 * `reverse_geocoder` is now installed with the package (no `[location]` extra).
+* Stata `.dta` files are supported.
+* `check_survey()` (and `surveyidmasker check`) lists what still looks identifying in a
+  file, e.g. a masked file before sharing it.
+* Location and contact columns such as `zip`, `city`, `region`, `areacode` and `phone` are
+  suggested, and phone numbers are looked for in free text.
+* The report ends with a sentence ready to paste into a methods section or a replication
+  README, followed by the reference.
+* IDs stored as numbers (SPSS, Stata, Excel) are written in full before masking, so
+  `100000` gets the same code as the text `"100000"` in a CSV.
+* CSV files must be UTF-8 (a clear error otherwise); an empty file gives a clear error.
+* When an ID contains another, the longer one is replaced whole in free text.
+* `CODES.md` explains how the codes are made, with test values (checked in the tests).
 * In the guided mode, files are given as paths (drag them into the terminal) instead
   of a file window.
-* Checked against R 0.3.0: identical output on the example files (CSV, SPSS, Excel), single and
+* Checked against R 0.3.0 (current): identical output on the example files (CSV, SPSS, Stata, Excel), single and
   batch, apart from the readable region prefix and trailing spaces in Excel cells
   (R trims them).
 

@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from . import citation, list_columns, mask_survey, new_key_file, reidentify
+from . import check_survey, citation, list_columns, mask_survey, new_key_file, reidentify
 
 
 def _columns(values):
@@ -38,6 +38,10 @@ def main(argv=None):
     r.add_argument("--overwrite", action="store_true")
     r.add_argument("--header-rows", type=int)
 
+    k0 = sub.add_parser("check", help="list what still looks identifying in a file")
+    k0.add_argument("files", nargs="+", help="file(s) or a folder")
+    k0.add_argument("--header-rows", type=int)
+
     c = sub.add_parser("columns", help="list columns with their numbers")
     c.add_argument("file")
 
@@ -53,6 +57,8 @@ def main(argv=None):
                         not a.no_scan_text, a.mask_text, a.output, a.overwrite, a.header_rows)
         elif a.cmd == "reidentify":
             reidentify(a.files if len(a.files) > 1 else a.files[0], a.key_file, a.output, a.overwrite, a.header_rows)
+        elif a.cmd == "check":
+            check_survey(a.files if len(a.files) > 1 else a.files[0], a.header_rows)
         elif a.cmd == "columns":
             list_columns(a.file)
         elif a.cmd == "new-key":

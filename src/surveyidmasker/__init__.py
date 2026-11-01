@@ -2,6 +2,7 @@
 surveyIDmasker R package; key files and codes are interchangeable)."""
 __version__ = "0.3.0"
 
+from .check import check_survey
 from .detect import suggest_id_columns
 from .key import new_key_file
 from .mask import mask_values
@@ -16,5 +17,5 @@ def citation():
             f"exports (Version {__version__}). Zenodo. https://doi.org/10.5281/zenodo.23599338")
 
 
-__all__ = ["list_columns", "mask_survey", "mask_values", "new_key_file", "read_survey",
+__all__ = ["check_survey", "list_columns", "mask_survey", "mask_values", "new_key_file", "read_survey",
            "reidentify", "scan_text", "suggest_id_columns", "citation"]
